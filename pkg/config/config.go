@@ -699,6 +699,11 @@ type ModelConfig struct {
 	AuthMethod  string `json:"auth_method,omitempty"`  // Authentication method: oauth, token
 	ConnectMode string `json:"connect_mode,omitempty"` // Connection mode: stdio, grpc
 	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
+	Binary      string `json:"binary,omitempty"`       // Binary path for subprocess-backed providers
+	ModelPath   string `json:"model_path,omitempty"`   // Local model path for subprocess-backed providers
+	Template    string `json:"template,omitempty"`     // Prompt template for subprocess-backed providers
+	Threads     int    `json:"threads,omitempty"`      // Thread count for subprocess-backed providers
+	MaxTokens   int    `json:"max_tokens,omitempty"`   // Default completion token limit for subprocess-backed providers
 
 	// Optional optimizations
 	RPM                 int               `json:"rpm,omitempty"`              // Requests per minute limit
@@ -783,6 +788,15 @@ type ToolDiscoveryConfig struct {
 
 type ToolConfig struct {
 	Enabled bool `json:"enabled" yaml:"-" env:"ENABLED"`
+}
+
+type AlohaClawConfig struct {
+	ToolConfig   `                              envPrefix:"PICOCLAW_TOOLS_ALOHACLAW_"`
+	BrokerIP     string `json:"broker_ip"             yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_BROKER_IP"`
+	Port         int    `json:"port"                  yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_PORT"`
+	BotID        string `json:"bot_id"                yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_ID"`
+	BotPassword  string `json:"bot_password"          yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_PASSWORD"`
+	ReplyTimeout int    `json:"reply_timeout_seconds" yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_REPLY_TIMEOUT_SECONDS"`
 }
 
 type BraveConfig struct {
@@ -999,6 +1013,7 @@ type ToolsConfig struct {
 	Subagent        ToolConfig         `json:"subagent"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
+	AlohaClaw       AlohaClawConfig    `json:"alohaclaw"         yaml:"-"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
@@ -1738,6 +1753,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.WriteFile.Enabled
 	case "mcp":
 		return t.MCP.Enabled
+	case "alohaclaw":
+		return t.AlohaClaw.Enabled
 	default:
 		return true
 	}

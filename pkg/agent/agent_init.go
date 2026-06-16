@@ -147,6 +147,20 @@ func registerSharedTools(
 			}
 		}
 
+		// AlohaClaw tool: connects to AlohaClaw MQTT broker to control other bots
+		if cfg.Tools.IsToolEnabled("alohaclaw") {
+			ac := cfg.Tools.AlohaClaw
+			port := ac.Port
+			if port <= 0 {
+				port = 8883
+			}
+			replyTimeout := time.Duration(ac.ReplyTimeout) * time.Second
+			if replyTimeout <= 0 {
+				replyTimeout = 10 * time.Second
+			}
+			agent.Tools.Register(tools.NewAlohaClawTool(ac.BrokerIP, port, ac.BotID, ac.BotPassword, replyTimeout))
+		}
+
 		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 		if cfg.Tools.IsToolEnabled("i2c") {
 			agent.Tools.Register(tools.NewI2CTool())
