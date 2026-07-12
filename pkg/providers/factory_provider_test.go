@@ -235,6 +235,46 @@ func TestCreateProviderFromConfig_DefaultAPIBase(t *testing.T) {
 	}
 }
 
+func TestCreateProviderFromConfig_PicoLM(t *testing.T) {
+	cfg := &config.ModelConfig{
+		ModelName: "picolm-local",
+		Provider:  "picolm",
+		Model:     "picolm-local",
+		Binary:    "/usr/local/bin/picolm",
+		ModelPath: "/models/tinyllama.gguf",
+		Template:  "chatml",
+		Threads:   4,
+		MaxTokens: 256,
+		Workspace: "/workspace",
+	}
+
+	provider, modelID, err := CreateProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig() error = %v", err)
+	}
+	if modelID != "picolm-local" {
+		t.Fatalf("modelID = %q, want %q", modelID, "picolm-local")
+	}
+	if _, ok := provider.(*PicoLMProvider); !ok {
+		t.Fatalf("expected *PicoLMProvider, got %T", provider)
+	}
+}
+
+func TestCreateProviderFromConfig_PicoLMRequiresModelPath(t *testing.T) {
+	cfg := &config.ModelConfig{
+		ModelName: "picolm-local",
+		Model:     "picolm/picolm-local",
+	}
+
+	_, _, err := CreateProviderFromConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing model_path")
+	}
+	if !strings.Contains(err.Error(), "model_path is required") {
+		t.Fatalf("error = %v, want model_path requirement", err)
+	}
+}
+
 func TestGetDefaultAPIBase_LiteLLM(t *testing.T) {
 	if got := getDefaultAPIBase("litellm"); got != "http://localhost:4000/v1" {
 		t.Fatalf("getDefaultAPIBase(%q) = %q, want %q", "litellm", got, "http://localhost:4000/v1")

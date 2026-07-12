@@ -23,6 +23,21 @@ func isProvidersMapEmpty(providers map[string]any) bool {
 			if authMethod, ok := provMap["auth_method"]; ok && authMethod != "" {
 				return false
 			}
+			if binary, ok := provMap["binary"]; ok && binary != "" {
+				return false
+			}
+			if modelPath, ok := provMap["model"]; ok && modelPath != "" {
+				return false
+			}
+			if threads, ok := provMap["threads"]; ok && threads != nil {
+				return false
+			}
+			if template, ok := provMap["template"]; ok && template != "" {
+				return false
+			}
+			if maxTokens, ok := provMap["max_tokens"]; ok && maxTokens != nil {
+				return false
+			}
 		}
 	}
 	return true
@@ -39,6 +54,30 @@ func v0ProvidersMapToModelList(providers map[string]any, userProvider, userModel
 	}
 
 	migrations := []providerMigration{
+		{
+			jsonKeys: []string{"picolm"},
+			protocol: "picolm",
+			defModel: "picolm-local",
+			extractFn: func(prov map[string]any) map[string]any {
+				entry := make(map[string]any)
+				if v, ok := prov["binary"]; ok && v != "" {
+					entry["binary"] = v
+				}
+				if v, ok := prov["model"]; ok && v != "" {
+					entry["model_path"] = v
+				}
+				if v, ok := prov["max_tokens"]; ok && v != nil {
+					entry["max_tokens"] = v
+				}
+				if v, ok := prov["threads"]; ok && v != nil {
+					entry["threads"] = v
+				}
+				if v, ok := prov["template"]; ok && v != "" {
+					entry["template"] = v
+				}
+				return entry
+			},
+		},
 		{
 			jsonKeys: []string{"openai", "gpt"},
 			protocol: "openai",
@@ -597,7 +636,16 @@ func v0ProvidersMapToModelList(providers map[string]any, userProvider, userModel
 		}
 
 		// Add model_name and model
-		entry["model_name"] = migration.jsonKeys[0]
+		modelName := migration.jsonKeys[0]
+		if migration.protocol == "picolm" && userProvider != "" && userModel != "" {
+			for _, key := range migration.jsonKeys {
+				if userProvider == key {
+					modelName = userModel
+					break
+				}
+			}
+		}
+		entry["model_name"] = modelName
 
 		// Use the user's model if the provider matches, otherwise use the default
 		modelToUse := migration.defModel

@@ -209,6 +209,49 @@ func TestMigrateV0ToV3(t *testing.T) {
 	require.Equal(t, true, discordGroupTrigger["mention_only"])
 }
 
+func TestMigrateV0ToV3_PicoLM(t *testing.T) {
+	v0Config := `{
+		"agents": {
+			"defaults": {
+				"provider": "picolm",
+				"model": "picolm-local"
+			}
+		},
+		"providers": {
+			"picolm": {
+				"binary": "~/.picolm/bin/picolm",
+				"model": "~/.picolm/models/tinyllama.gguf",
+				"max_tokens": 256,
+				"threads": 4,
+				"template": "chatml"
+			}
+		}
+	}`
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(v0Config), 0o600))
+
+	m, err := loadConfigMap(configPath)
+	require.NoError(t, err)
+	require.NoError(t, migrateV0ToV1(m))
+	require.NoError(t, migrateV1ToV2(m))
+	require.NoError(t, migrateV2ToV3(m))
+
+	modelList, ok := m["model_list"].([]any)
+	require.True(t, ok, "model_list should exist")
+	require.Len(t, modelList, 1)
+
+	entry := modelList[0].(map[string]any)
+	require.Equal(t, "picolm-local", entry["model_name"])
+	require.Equal(t, "picolm/picolm-local", entry["model"])
+	require.Equal(t, "~/.picolm/bin/picolm", entry["binary"])
+	require.Equal(t, "~/.picolm/models/tinyllama.gguf", entry["model_path"])
+	require.Equal(t, "chatml", entry["template"])
+	require.Equal(t, float64(4), entry["threads"])
+	require.Equal(t, float64(256), entry["max_tokens"])
+}
+
 // TestMigrateV0ToV3_WithExistingModelList preserves existing model_list when present.
 func TestMigrateV0ToV3_WithExistingModelList(t *testing.T) {
 	v0Config := `{

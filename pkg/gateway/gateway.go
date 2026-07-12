@@ -42,6 +42,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/devices"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/fanreflex"
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/heartbeat"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -66,6 +67,7 @@ const (
 type services struct {
 	CronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
+	FanReflexService *fanreflex.Service
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
@@ -395,6 +397,26 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Heartbeat service started")
 
+	if cfg.Tools.FanReflex.Enabled {
+		frSvc, frErr := fanreflex.NewService(
+			cfg.Tools.FanReflex,
+			cfg.Tools.AlohaClaw,
+			msgBus,
+			cfg.WorkspacePath(),
+		)
+		if frErr != nil {
+			logger.WarnCF("fanreflex", "Service failed to start — policy invalid or MQTT unavailable",
+				map[string]any{"error": frErr.Error()})
+		} else {
+			runningServices.FanReflexService = frSvc
+			if err = frSvc.Start(); err != nil {
+				logger.WarnCF("fanreflex", "Service start error", map[string]any{"error": err.Error()})
+			} else {
+				fmt.Println("✓ FanReflex service started")
+			}
+		}
+	}
+
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
@@ -498,6 +520,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	}
 	if runningServices.DeviceService != nil {
 		runningServices.DeviceService.Stop()
+	}
+	if runningServices.FanReflexService != nil {
+		runningServices.FanReflexService.Stop()
 	}
 	if runningServices.HeartbeatService != nil {
 		runningServices.HeartbeatService.Stop()

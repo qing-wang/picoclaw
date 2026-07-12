@@ -11,6 +11,7 @@ type (
 	CodexCliProvider      = cliprovider.CodexCliProvider
 	CodexCliAuth          = cliprovider.CodexCliAuth
 	GitHubCopilotProvider = cliprovider.GitHubCopilotProvider
+	PicoLMProvider        = cliprovider.PicoLMProvider
 )
 
 const CodexHomeEnvVar = cliprovider.CodexHomeEnvVar
@@ -25,6 +26,10 @@ func NewCodexCliProvider(workspace string) *CodexCliProvider {
 
 func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*GitHubCopilotProvider, error) {
 	return cliprovider.NewGitHubCopilotProvider(uri, connectMode, model)
+}
+
+func NewPicoLMProvider(command, modelPath, template string, threads, maxTokens int, workspace string) *PicoLMProvider {
+	return cliprovider.NewPicoLMProvider(command, modelPath, template, threads, maxTokens, workspace)
 }
 
 func ReadCodexCliCredentials() (accessToken, accountID string, expiresAt time.Time, err error) {

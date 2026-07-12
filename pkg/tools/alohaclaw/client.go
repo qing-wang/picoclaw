@@ -14,6 +14,46 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
+// Sender is the minimal interface needed to send commands and messages over the
+// AlohaClaw MQTT network. It is implemented by alohaClawClient and consumed by
+// both AlohaClawTool and the fanreflex service, so both can share one connection.
+type Sender interface {
+	SendCommand(ctx context.Context, targetID, text string, waitReply time.Duration) (string, error)
+	SendMessage(targetID, text string) error
+	IsConnected() bool
+}
+
+// singletonKey uniquely identifies one MQTT connection.
+type singletonKey struct {
+	brokerIP string
+	port     int
+	botID    string
+}
+
+var (
+	singletons   = map[singletonKey]*alohaClawClient{}
+	singletonsMu sync.Mutex
+)
+
+// GetOrCreateClient returns the shared alohaClawClient for the given broker and
+// bot identity, creating a new one on the first call. Subsequent calls with the
+// same (brokerIP, port, botID) return the cached instance; password is only
+// used when the connection does not yet exist.
+func GetOrCreateClient(brokerIP string, port int, botID, password string) (Sender, error) {
+	key := singletonKey{brokerIP, port, botID}
+	singletonsMu.Lock()
+	defer singletonsMu.Unlock()
+	if c, ok := singletons[key]; ok {
+		return c, nil
+	}
+	c, err := newAlohaClawClient(brokerIP, port, botID, password)
+	if err != nil {
+		return nil, err
+	}
+	singletons[key] = c
+	return c, nil
+}
+
 // Built-in CA certificate for AlohaClaw MQTT broker TLS verification.
 // Mirrors the BuiltInTrustChainPem constant in the C# AlohaClaw SDK.
 const builtInCAPEM = `-----BEGIN CERTIFICATE-----

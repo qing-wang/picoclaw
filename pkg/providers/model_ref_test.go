@@ -78,6 +78,7 @@ func TestNormalizeProvider(t *testing.T) {
 		{"claudecli", "claude-cli"},
 		{"codexcli", "codex-cli"},
 		{"copilot", "github-copilot"},
+		{"pico-lm", "picolm"},
 		// Alibaba Coding Plan aliases
 		{"alibaba-coding", "coding-plan"},
 		{"qwen-coding", "coding-plan"},

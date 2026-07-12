@@ -66,6 +66,8 @@ func NormalizeProvider(provider string) string {
 		return "codex-cli"
 	case "copilot":
 		return "github-copilot"
+	case "pico-lm":
+		return "picolm"
 	}
 
 	return p

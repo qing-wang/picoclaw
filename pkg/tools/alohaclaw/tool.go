@@ -19,7 +19,7 @@ type AlohaClawTool struct {
 
 	mu       sync.Mutex
 	initOnce sync.Once
-	client   *alohaClawClient
+	client   Sender
 	initErr  error
 }
 
@@ -82,9 +82,9 @@ func (t *AlohaClawTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	}
 }
 
-func (t *AlohaClawTool) getClient() (*alohaClawClient, error) {
+func (t *AlohaClawTool) getClient() (Sender, error) {
 	t.initOnce.Do(func() {
-		cl, err := newAlohaClawClient(t.brokerIP, t.port, t.botID, t.botPassword)
+		cl, err := GetOrCreateClient(t.brokerIP, t.port, t.botID, t.botPassword)
 		if err != nil {
 			t.initErr = fmt.Errorf("AlohaClaw connect failed: %w", err)
 			return
@@ -149,7 +149,7 @@ func (t *AlohaClawTool) doSendMessage(args map[string]any) *ToolResult {
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	if err := cl.SendMessage(targetID, text); err != nil {
+	if err = cl.SendMessage(targetID, text); err != nil {
 		return ErrorResult(fmt.Sprintf("send_message to %q: %v", targetID, err))
 	}
 	return SilentResult(fmt.Sprintf("Message sent to %q.", targetID))

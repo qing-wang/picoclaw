@@ -1014,6 +1014,17 @@ type ToolsConfig struct {
 	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 	AlohaClaw       AlohaClawConfig    `json:"alohaclaw"         yaml:"-"`
+	FanReflex       FanReflexConfig    `json:"fanreflex"         yaml:"-"`
+}
+
+// FanReflexConfig configures the deterministic fan-reflex control service.
+type FanReflexConfig struct {
+	Enabled         bool   `json:"enabled"            yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_ENABLED"`
+	TargetBotID     string `json:"target_bot_id"      yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_TARGET_BOT_ID"`
+	PolicyPath      string `json:"policy_path"        yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_POLICY_PATH"`
+	ModePath        string `json:"mode_path"          yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_MODE_PATH"`
+	DecisionLogPath string `json:"decision_log_path"  yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_DECISION_LOG_PATH"`
+	Shadow          bool   `json:"shadow"             yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_SHADOW"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
