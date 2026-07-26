@@ -603,3 +603,62 @@ func TestRateLimiterMaxEntries(t *testing.T) {
 		t.Errorf("rate limiter map size %d exceeds cap %d", size, rateLimiterMaxEntries)
 	}
 }
+
+// ---- CRITICAL-2 regression: SecureString credentials must not leak ----------
+
+// TestMaskConfigForOutput_PreventsCleartextLeak verifies end-to-end security for
+// a real config.Config containing a non-empty SecureString credential.
+//
+// Go 1.24+ encoding/json honours omitzero: SecureString.IsZero() returns true for
+// non-yaml callers, so SecureString fields are ABSENT from JSON output entirely.
+// Absence is safe. The [NOT_HERE]→"********" replacement in maskConfigForOutput is
+// defense-in-depth for any encoder that calls MarshalJSON() unconditionally.
+//
+// This test verifies two things:
+//   (a) Migration: old config.json with plaintext bot_password is accepted by
+//       SecureString.UnmarshalJSON and held correctly (String() returns the value).
+//   (b) Security: the plaintext never appears in the masked GET /config output,
+//       whether the field is absent or replaced by "********".
+func TestMaskConfigForOutput_PreventsCleartextLeak(t *testing.T) {
+	const secret = "super-secret-bot-password-xyz"
+
+	// Simulate old config.json that has a plaintext bot_password
+	// (migration scenario: device config written before SecureString change).
+	cfgJSON := `{"version":3,"tools":{"alohaclaw":{"enabled":true,"bot_password":"` + secret + `"}},"model_list":[]}`
+	var cfg config.Config
+	if err := json.Unmarshal([]byte(cfgJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// (a) Migration compatibility: plaintext must be accepted and held
+	if got := cfg.Tools.AlohaClaw.BotPassword.String(); got != secret {
+		t.Fatalf("migration check: BotPassword.String() = %q, want %q", got, secret)
+	}
+
+	out, err := maskConfigForOutput(&cfg)
+	if err != nil {
+		t.Fatalf("maskConfigForOutput: %v", err)
+	}
+
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	outStr := string(data)
+
+	// (b) Primary security invariant: plaintext must never appear in the output
+	if strings.Contains(outStr, secret) {
+		t.Errorf("GET /config response leaked plaintext credential: %s", outStr)
+	}
+
+	// If the field appears, it must be the mask sentinel — not the raw value
+	if tools, ok := out["tools"].(map[string]any); ok {
+		if alohaClaw, ok := tools["alohaclaw"].(map[string]any); ok {
+			if bp, present := alohaClaw["bot_password"]; present {
+				if bp != secretMask {
+					t.Errorf("bot_password present in output as %q; want %q or absent", bp, secretMask)
+				}
+			}
+		}
+	}
+}

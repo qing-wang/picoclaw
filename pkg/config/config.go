@@ -740,7 +740,7 @@ type VoiceConfig struct {
 	ModelName         string `json:"model_name,omitempty"         env:"PICOCLAW_VOICE_MODEL_NAME"`
 	TTSModelName      string `json:"tts_model_name,omitempty"     env:"PICOCLAW_VOICE_TTS_MODEL_NAME"`
 	EchoTranscription bool   `json:"echo_transcription"           env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
-	ElevenLabsAPIKey  string `json:"elevenlabs_api_key,omitempty" env:"PICOCLAW_VOICE_ELEVENLABS_API_KEY"`
+	ElevenLabsAPIKey  SecureString `json:"elevenlabs_api_key,omitzero" yaml:"elevenlabs_api_key,omitempty" env:"PICOCLAW_VOICE_ELEVENLABS_API_KEY"`
 }
 
 type ModelStreamingConfig struct {
@@ -872,12 +872,12 @@ type MessageToolsConfig struct {
 }
 
 type AlohaClawConfig struct {
-	ToolConfig   `                              envPrefix:"PICOCLAW_TOOLS_ALOHACLAW_"`
-	BrokerIP     string `json:"broker_ip"             yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_BROKER_IP"`
-	Port         int    `json:"port"                  yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_PORT"`
-	BotID        string `json:"bot_id"                yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_ID"`
-	BotPassword  string `json:"bot_password"          yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_PASSWORD"`
-	ReplyTimeout int    `json:"reply_timeout_seconds" yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_REPLY_TIMEOUT_SECONDS"`
+	ToolConfig   `                                   envPrefix:"PICOCLAW_TOOLS_ALOHACLAW_"`
+	BrokerIP     string       `json:"broker_ip"             yaml:"-"                        env:"PICOCLAW_TOOLS_ALOHACLAW_BROKER_IP"`
+	Port         int          `json:"port"                  yaml:"-"                        env:"PICOCLAW_TOOLS_ALOHACLAW_PORT"`
+	BotID        string       `json:"bot_id"                yaml:"-"                        env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_ID"`
+	BotPassword  SecureString `json:"bot_password,omitzero" yaml:"bot_password,omitempty"  env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_PASSWORD"`
+	ReplyTimeout int          `json:"reply_timeout_seconds" yaml:"-"                        env:"PICOCLAW_TOOLS_ALOHACLAW_REPLY_TIMEOUT_SECONDS"`
 }
 
 type BraveConfig struct {

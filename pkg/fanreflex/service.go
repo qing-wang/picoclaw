@@ -167,7 +167,7 @@ func NewService(
 		port = 8883
 	}
 	client, err := alohaclawtools.GetOrCreateClient(
-		alohaCfg.BrokerIP, port, alohaCfg.BotID, alohaCfg.BotPassword,
+		alohaCfg.BrokerIP, port, alohaCfg.BotID, alohaCfg.BotPassword.String(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("fanreflex: MQTT connect: %w", err)

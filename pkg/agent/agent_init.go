@@ -160,7 +160,7 @@ func registerSharedTools(
 			if replyTimeout <= 0 {
 				replyTimeout = 10 * time.Second
 			}
-			agent.Tools.Register(tools.NewAlohaClawTool(ac.BrokerIP, port, ac.BotID, ac.BotPassword, replyTimeout))
+			agent.Tools.Register(tools.NewAlohaClawTool(ac.BrokerIP, port, ac.BotID, ac.BotPassword.String(), replyTimeout))
 		}
 
 		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
