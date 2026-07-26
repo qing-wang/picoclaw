@@ -37,10 +37,10 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"device_id":   getOrCreateDeviceID(s.opts.HomePath),
+		"device_id":   s.deviceID,
 		"device_name": deviceName,
 		"version":     s.opts.Version,
-		"api_version": "v1",
+		"api_version": 1,
 		"platform":    fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
 		"paired":      paired,
 	})
@@ -151,10 +151,14 @@ func (s *Server) serveFileDownload(w http.ResponseWriter, _ *http.Request, absPa
 }
 
 func (s *Server) serveFileUpload(w http.ResponseWriter, r *http.Request, absPath string) {
-	data, err := io.ReadAll(io.LimitReader(r.Body, 4<<20)) // 4 MiB max
 	defer r.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+1)) // read one extra byte to detect oversize
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "read error"})
+		return
+	}
+	if len(data) > 1<<20 {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body exceeds 1 MiB limit"})
 		return
 	}
 
@@ -192,7 +196,8 @@ func validateFilePath(relPath string) error {
 
 	for _, allowed := range allowedPaths {
 		if strings.HasSuffix(allowed, "/") {
-			if strings.HasPrefix(cleaned, allowed) || cleaned == strings.TrimSuffix(allowed, "/") {
+			// Require at least one path component after the prefix (reject bare "skills")
+			if strings.HasPrefix(cleaned, allowed) {
 				return nil
 			}
 		} else {

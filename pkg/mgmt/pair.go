@@ -195,7 +195,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"device_id":   getOrCreateDeviceID(s.opts.HomePath),
+		"device_id":   s.deviceID,
 		"token":       token,
 		"device_name": deviceName,
 	})

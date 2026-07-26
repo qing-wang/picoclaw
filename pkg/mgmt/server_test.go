@@ -83,6 +83,17 @@ func authedGet(t *testing.T, srv *Server, urlPath, token string) *httptest.Respo
 	return w
 }
 
+func authedPatch(t *testing.T, srv *Server, urlPath, token, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPatch, urlPath, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	srv.withAuth(srv.handleConfig)(w, req)
+	return w
+}
+
 // ---- isPairAllowed ----------------------------------------------------------
 
 func TestIsPairAllowed_Subnet(t *testing.T) {
@@ -455,8 +466,8 @@ func TestInfoNoSensitiveFields(t *testing.T) {
 	if resp["device_id"] == nil || resp["device_id"] == "" {
 		t.Error("device_id missing")
 	}
-	if resp["api_version"] != "v1" {
-		t.Error("api_version missing or wrong")
+	if resp["api_version"] != float64(1) {
+		t.Errorf("api_version should be integer 1, got %v", resp["api_version"])
 	}
 
 	// Must NOT expose paired_clients list or any token hash
@@ -518,5 +529,77 @@ func TestAuthLockoutBlocksRequests(t *testing.T) {
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("locked IP should get 429, got %d", w.Code)
+	}
+}
+
+// ---- CRITICAL-1: config API cannot modify security-boundary mgmt fields -----
+
+func TestPatchConfig_RejectPairedClients(t *testing.T) {
+	srv, dir := newTestServer(t)
+	token := pairClient(t, srv, "test-client")
+
+	w := authedPatch(t, srv, "/mgmt/v1/config", token, `{"mgmt":{"paired_clients":[]}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("patching paired_clients should get 400, got %d %s", w.Code, w.Body.String())
+	}
+
+	// Verify disk unchanged — paired_clients still has 1 entry
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Mgmt.PairedClients) != 1 {
+		t.Errorf("disk should still have 1 paired client, got %d", len(cfg.Mgmt.PairedClients))
+	}
+}
+
+func TestPatchConfig_RejectPairSubnets(t *testing.T) {
+	srv, _ := newTestServer(t)
+	token := pairClient(t, srv, "test-client")
+
+	w := authedPatch(t, srv, "/mgmt/v1/config", token, `{"mgmt":{"pair_subnets":["0.0.0.0/0"]}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("patching pair_subnets should get 400, got %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPatchConfig_RejectMgmtEnabled(t *testing.T) {
+	srv, _ := newTestServer(t)
+	token := pairClient(t, srv, "test-client")
+
+	w := authedPatch(t, srv, "/mgmt/v1/config", token, `{"mgmt":{"enabled":false}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("patching mgmt.enabled should get 400, got %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPatchConfig_AllowDeviceName(t *testing.T) {
+	srv, _ := newTestServer(t)
+	token := pairClient(t, srv, "test-client")
+
+	w := authedPatch(t, srv, "/mgmt/v1/config", token, `{"mgmt":{"device_name":"renamed-device"}}`)
+	if w.Code != http.StatusOK {
+		t.Errorf("patching device_name should succeed, got %d %s", w.Code, w.Body.String())
+	}
+}
+
+// ---- MEDIUM-2: rate limiter map size is bounded -----------------------------
+
+func TestRateLimiterMaxEntries(t *testing.T) {
+	rl := newPairRateLimiter()
+	// Insert more unique IPs than the hard cap
+	for i := 0; i < rateLimiterMaxEntries+200; i++ {
+		ip := fmt.Sprintf("10.%d.%d.%d", (i>>16)&0xff, (i>>8)&0xff, i&0xff)
+		rl.allow(ip)
+	}
+	rl.mu.Lock()
+	size := len(rl.entries)
+	rl.mu.Unlock()
+	if size > rateLimiterMaxEntries {
+		t.Errorf("rate limiter map size %d exceeds cap %d", size, rateLimiterMaxEntries)
 	}
 }

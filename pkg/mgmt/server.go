@@ -37,6 +37,7 @@ type Options struct {
 type Server struct {
 	opts      Options
 	startedAt time.Time
+	deviceID  string // persistent UUID; resolved once in New() to avoid repeated disk I/O
 
 	mu             sync.RWMutex
 	reloadFunc     func() error
@@ -62,6 +63,7 @@ func New(opts Options) *Server {
 	return &Server{
 		opts:      opts,
 		startedAt: time.Now(),
+		deviceID:  getOrCreateDeviceID(opts.HomePath),
 		pairRL:    newPairRateLimiter(),
 		authTrk:   newAuthTracker(),
 	}
@@ -99,6 +101,7 @@ func (s *Server) RegisterOnMux(mux handlerMux) {
 }
 
 // loadConfig returns a cached (up to cfgCacheTTL) or fresh config from disk.
+// The returned pointer must not be mutated by callers; use config.LoadConfig directly if mutation is needed.
 func (s *Server) loadConfig() (*config.Config, error) {
 	s.cfgCacheMu.Lock()
 	defer s.cfgCacheMu.Unlock()
