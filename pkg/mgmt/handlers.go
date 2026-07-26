@@ -89,16 +89,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var fanreflexStatus map[string]any
+	fanreflexRunning := statusFn != nil
 	if statusFn != nil {
 		fanreflexStatus = statusFn()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uptime_seconds": int(time.Since(s.startedAt).Seconds()),
-		"version":        s.opts.Version,
-		"channels":       channels,
-		"fanreflex":      fanreflexStatus,
-		"config_path":    s.opts.ConfigPath,
+		"uptime_seconds":    int(time.Since(s.startedAt).Seconds()),
+		"version":           s.opts.Version,
+		"channels":          channels,
+		"fanreflex":         fanreflexStatus,
+		// fanreflex_running lets clients (e.g. the CTFanBot device management
+		// tab) distinguish "fanreflex not running" from "fanreflex running but
+		// StatusSnapshot returned an empty map" without having to infer it from
+		// fanreflex being null — see
+		// doc/task-m3d-reload-lifecycle-instructions.md §2 ("/status 必須誠實").
+		"fanreflex_running": fanreflexRunning,
+		"config_path":       s.opts.ConfigPath,
 	})
 }
 

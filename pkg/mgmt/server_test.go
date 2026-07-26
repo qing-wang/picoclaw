@@ -487,6 +487,110 @@ func TestInfoNoSensitiveFields(t *testing.T) {
 	}
 }
 
+// ---- /status fanreflex_running (task m3d: "/status 必須誠實") ----------------
+
+// TestHandleStatus_NoProvider_FanreflexRunningFalse verifies that when no
+// status provider is set (fanreflex never started, or a reload just tore it
+// down and hasn't rebuilt one), /mgmt/v1/status reports fanreflex: null AND
+// an explicit fanreflex_running: false — so a client does not have to infer
+// "not running" from null alone (see
+// doc/task-m3d-reload-lifecycle-instructions.md §2).
+func TestHandleStatus_NoProvider_FanreflexRunningFalse(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/mgmt/v1/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /status failed: %d %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["fanreflex"] != nil {
+		t.Errorf("expected fanreflex: null with no provider set, got %v", resp["fanreflex"])
+	}
+	running, ok := resp["fanreflex_running"].(bool)
+	if !ok {
+		t.Fatalf("fanreflex_running missing or not a bool: %v", resp["fanreflex_running"])
+	}
+	if running {
+		t.Error("expected fanreflex_running=false with no provider set")
+	}
+}
+
+// TestHandleStatus_WithProvider_FanreflexRunningTrue verifies that once a
+// status provider is set (a FanReflexService is running), /status reports
+// fanreflex_running: true and includes the provider's snapshot.
+func TestHandleStatus_WithProvider_FanreflexRunningTrue(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetStatusProvider(func() map[string]any {
+		return map[string]any{"enabled": true, "mode": "balanced"}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/mgmt/v1/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /status failed: %d %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	running, ok := resp["fanreflex_running"].(bool)
+	if !ok || !running {
+		t.Errorf("expected fanreflex_running=true with provider set, got %v", resp["fanreflex_running"])
+	}
+	fr, ok := resp["fanreflex"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected fanreflex snapshot map, got %v", resp["fanreflex"])
+	}
+	if fr["mode"] != "balanced" {
+		t.Errorf("expected snapshot to pass through, got %v", fr)
+	}
+}
+
+// TestHandleStatus_ProviderClearedAfterReload verifies the exact scenario
+// that motivated fanreflex_running: SetStatusProvider(nil) (what gateway does
+// when FanReflexService is stopped and not rebuilt on reload, e.g. the user
+// disabled it) must flip fanreflex_running back to false even though the
+// server previously reported true.
+func TestHandleStatus_ProviderClearedAfterReload(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetStatusProvider(func() map[string]any { return map[string]any{"enabled": true} })
+
+	get := func() map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/mgmt/v1/status", nil)
+		w := httptest.NewRecorder()
+		srv.handleStatus(w, req)
+		var resp map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	before := get()
+	if running, _ := before["fanreflex_running"].(bool); !running {
+		t.Fatal("precondition: fanreflex_running should be true before clearing the provider")
+	}
+
+	// Simulate what restartServices does when fanreflex is not rebuilt.
+	srv.SetStatusProvider(nil)
+
+	after := get()
+	if running, _ := after["fanreflex_running"].(bool); running {
+		t.Error("expected fanreflex_running=false after SetStatusProvider(nil)")
+	}
+	if after["fanreflex"] != nil {
+		t.Errorf("expected fanreflex: null after SetStatusProvider(nil), got %v", after["fanreflex"])
+	}
+}
+
 // ---- generateToken ----------------------------------------------------------
 
 func TestGenerateToken_Uniqueness(t *testing.T) {
