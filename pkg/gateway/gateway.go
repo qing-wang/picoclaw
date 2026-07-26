@@ -425,17 +425,21 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Heartbeat service started")
 
-	// BotLink is constructed here (ahead of ChannelManager/mux setup below) so
-	// its Sender is available immediately for FanReflexService, which may be
-	// configured to use it as its transport. RegisterOnMux happens later,
-	// once the shared gateway mux exists.
-	if cfg.Tools.BotLink.Enabled {
-		runningServices.BotLinkServer = botlink.New(cfg.Tools.BotLink)
-	}
+	// BotLink is always constructed here (ahead of ChannelManager/mux setup
+	// below), regardless of cfg.Tools.BotLink.Enabled: its Sender must be
+	// available immediately for FanReflexService (which may be configured to
+	// use it as its transport), and — more importantly — its /botlink/ws
+	// handler is registered on the mux exactly once, below, for the lifetime
+	// of the process. Enable/disable is a runtime flag inside the Server
+	// (see botlink.Server.handleWebSocket / UpdateConfig), not a
+	// construction/registration decision, precisely so that toggling BotLink
+	// on via a config reload never needs a second RegisterOnMux call (which
+	// would panic — see doc/task-m3d-reload-lifecycle-instructions.md §2).
+	runningServices.BotLinkServer = botlink.New(cfg.Tools.BotLink)
 
 	if cfg.Tools.FanReflex.Enabled {
 		var botlinkSender alohaclawtools.Sender
-		if runningServices.BotLinkServer != nil {
+		if cfg.Tools.BotLink.Enabled {
 			botlinkSender = runningServices.BotLinkServer.Sender()
 		}
 		frSvc, frErr := fanreflex.NewService(
@@ -513,8 +517,11 @@ func setupAndStartServices(
 		runningServices.HealthServer,
 	)
 
-	if runningServices.BotLinkServer != nil {
-		runningServices.BotLinkServer.RegisterOnMux(runningServices.ChannelManager.Mux())
+	// Registered unconditionally (see the BotLinkServer construction comment
+	// above) — this call must happen exactly once for the life of the
+	// process. handleWebSocket itself enforces the enabled/disabled state.
+	runningServices.BotLinkServer.RegisterOnMux(runningServices.ChannelManager.Mux())
+	if cfg.Tools.BotLink.Enabled {
 		fmt.Printf("✓ BotLink transport enabled at %s\n", botlink.WSPath)
 	}
 
@@ -570,7 +577,12 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.FanReflexService != nil {
 		runningServices.FanReflexService.Stop()
 	}
-	if runningServices.BotLinkServer != nil {
+	// BotLinkServer survives reload: its /botlink/ws handler is registered on
+	// the shared mux exactly once, at startup, and http.ServeMux panics on
+	// duplicate registration — so reload cannot stop-and-recreate it the way
+	// it does FanReflexService. restartServices calls UpdateConfig on this
+	// same instance instead. Only a full process shutdown stops it.
+	if !isReload && runningServices.BotLinkServer != nil {
 		runningServices.BotLinkServer.Stop()
 	}
 	if runningServices.HeartbeatService != nil {
@@ -716,6 +728,57 @@ func restartServices(
 		return fmt.Errorf("error restarting heartbeat service: %w", err)
 	}
 	fmt.Println("  ✓ Heartbeat service restarted")
+
+	// BotLinkServer itself is never stopped/recreated on reload (see
+	// stopAndCleanupServices) — its /botlink/ws mux registration must stay
+	// exactly-once for the process lifetime. UpdateConfig swaps in the new
+	// bot authorization table and enabled flag on the same, live instance,
+	// closing the connection of any bot that was just removed from config.
+	if runningServices.BotLinkServer != nil {
+		runningServices.BotLinkServer.UpdateConfig(cfg.Tools.BotLink)
+	}
+
+	// FanReflexService has no mux-registration constraint (fanreflex owns no
+	// HTTP handler), so — unlike BotLinkServer — it is rebuilt from scratch
+	// here, mirroring setupAndStartServices' startup sequence: this is what
+	// was previously missing entirely, silently leaving fan control stopped
+	// after every reload (see doc/task-m3d-reload-lifecycle-instructions.md §1).
+	runningServices.FanReflexService = nil
+	if cfg.Tools.FanReflex.Enabled {
+		var botlinkSender alohaclawtools.Sender
+		if cfg.Tools.BotLink.Enabled && runningServices.BotLinkServer != nil {
+			botlinkSender = runningServices.BotLinkServer.Sender()
+		}
+		frSvc, frErr := fanreflex.NewService(
+			cfg.Tools.FanReflex,
+			cfg.Tools.AlohaClaw,
+			botlinkSender,
+			msgBus,
+			cfg.WorkspacePath(),
+		)
+		if frErr != nil {
+			logger.WarnCF("fanreflex", "Service failed to restart — policy invalid or transport unavailable",
+				map[string]any{"error": frErr.Error()})
+		} else if startErr := frSvc.Start(); startErr != nil {
+			logger.WarnCF("fanreflex", "Service restart error", map[string]any{"error": startErr.Error()})
+		} else {
+			runningServices.FanReflexService = frSvc
+			fmt.Println("  ✓ FanReflex service restarted")
+		}
+	}
+
+	// /mgmt/v1/status must reflect the just-rebuilt (or now-absent)
+	// FanReflexService, not the stale, already-stopped pre-reload instance —
+	// otherwise it keeps reporting "enabled: true" for a service that no
+	// longer exists (see §1/§2 of the task doc: this is what let the M2
+	// "reload now" button silently and invisibly kill fan control).
+	if runningServices.MgmtServer != nil {
+		if runningServices.FanReflexService != nil {
+			runningServices.MgmtServer.SetStatusProvider(runningServices.FanReflexService.StatusSnapshot)
+		} else {
+			runningServices.MgmtServer.SetStatusProvider(nil)
+		}
+	}
 
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
