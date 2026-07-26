@@ -386,6 +386,30 @@ func createStartupProvider(
 	return provider, modelID, nil
 }
 
+// alohaClawBotLinkProvider builds the provider function wired into the
+// alohaclaw LLM tool via AgentLoop.SetAlohaClawBotLinkProvider. It mirrors
+// fanreflex's own "botlink enabled?" check (fanreflex.selectTransport) but,
+// unlike fanreflex's construct-time check, is evaluated lazily on every tool
+// call rather than once: cfg/server are captured by this closure at wiring
+// time (startup, and again after every reload), so the check always reflects
+// the config that was active as of the most recent wiring call.
+//
+// Returning an explicit error (rather than a nil Sender that callers might
+// silently ignore) matters here: AlohaClawTool must fail loudly when
+// transport=botlink but BotLink isn't actually available, never fall back to
+// MQTT silently (see doc/task-m3g-llm-tool-transport-instructions.md §2.3).
+func alohaClawBotLinkProvider(cfg *config.Config, server *botlink.Server) func() (alohaclawtools.Sender, error) {
+	return func() (alohaclawtools.Sender, error) {
+		if server == nil {
+			return nil, fmt.Errorf("botlink server not initialized")
+		}
+		if !cfg.Tools.BotLink.Enabled {
+			return nil, fmt.Errorf("botlink not enabled (tools.botlink.enabled=false)")
+		}
+		return server.Sender(), nil
+	}
+}
+
 func setupAndStartServices(
 	cfg *config.Config,
 	agentLoop *agent.AgentLoop,
@@ -436,6 +460,16 @@ func setupAndStartServices(
 	// on via a config reload never needs a second RegisterOnMux call (which
 	// would panic — see doc/task-m3d-reload-lifecycle-instructions.md §2).
 	runningServices.BotLinkServer = botlink.New(cfg.Tools.BotLink)
+
+	// Wire the alohaclaw LLM tool's BotLink provider now that the server
+	// exists (see AlohaClawTool.SetBotLinkProvider for why this can't happen
+	// at tool-construction time, back in agent.NewAgentLoop above). Called
+	// unconditionally: SetAlohaClawBotLinkProvider is a no-op if no
+	// "alohaclaw" tool is registered, and the provider closure itself
+	// re-checks cfg.Tools.BotLink.Enabled on every call (not just now), so
+	// this stays correct across later reloads that flip the flag via
+	// restartServices' equivalent call below.
+	agentLoop.SetAlohaClawBotLinkProvider(alohaClawBotLinkProvider(cfg, runningServices.BotLinkServer))
 
 	if cfg.Tools.FanReflex.Enabled {
 		var botlinkSender alohaclawtools.Sender
@@ -737,6 +771,12 @@ func restartServices(
 	if runningServices.BotLinkServer != nil {
 		runningServices.BotLinkServer.UpdateConfig(cfg.Tools.BotLink)
 	}
+
+	// registerSharedTools (called from ReloadProviderAndConfig, before
+	// restartServices runs) builds a fresh "alohaclaw" tool instance on the
+	// new registry, which starts with no BotLink provider wired in — rewire
+	// it here, same as the initial setupAndStartServices wiring above.
+	al.SetAlohaClawBotLinkProvider(alohaClawBotLinkProvider(cfg, runningServices.BotLinkServer))
 
 	// FanReflexService has no mux-registration constraint (fanreflex owns no
 	// HTTP handler), so — unlike BotLinkServer — it is rebuilt from scratch

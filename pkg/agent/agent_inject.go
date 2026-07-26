@@ -8,6 +8,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	alohaclawtools "github.com/sipeed/picoclaw/pkg/tools/alohaclaw"
 )
 
 func (al *AgentLoop) RegisterTool(tool tools.Tool) {
@@ -48,6 +49,25 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	registry.ForEachTool("send_tts", func(t tools.Tool) {
 		if st, ok := t.(*tools.SendTTSTool); ok {
 			st.SetMediaStore(s)
+		}
+	})
+}
+
+// SetAlohaClawBotLinkProvider wires provider into every currently-registered
+// "alohaclaw" tool instance (one per agent) as their BotLink Sender resolver.
+// Called by the gateway once the BotLink server exists — which happens after
+// the agent loop (and its tools) are constructed, see
+// pkg/tools/alohaclaw.AlohaClawTool.SetBotLinkProvider for why this has to be
+// deferred like this — and again after every config reload, since
+// ReloadProviderAndConfig/registerSharedTools builds fresh tool instances on
+// a new registry that also need rewiring.
+//
+// provider may be nil to clear a previously-set provider.
+func (al *AgentLoop) SetAlohaClawBotLinkProvider(provider func() (alohaclawtools.Sender, error)) {
+	registry := al.GetRegistry()
+	registry.ForEachTool("alohaclaw", func(t tools.Tool) {
+		if act, ok := t.(*tools.AlohaClawTool); ok {
+			act.SetBotLinkProvider(provider)
 		}
 	})
 }
