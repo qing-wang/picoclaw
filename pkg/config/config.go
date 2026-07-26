@@ -1131,6 +1131,7 @@ type ToolsConfig struct {
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 	AlohaClaw       AlohaClawConfig    `json:"alohaclaw"         yaml:"alohaclaw,omitempty"`
 	FanReflex       FanReflexConfig    `json:"fanreflex"         yaml:"-"`
+	BotLink         BotLinkConfig      `json:"botlink"           yaml:"-"`
 }
 
 // FanReflexConfig configures the deterministic fan-reflex control service.
@@ -1141,6 +1142,47 @@ type FanReflexConfig struct {
 	ModePath        string `json:"mode_path"          yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_MODE_PATH"`
 	DecisionLogPath string `json:"decision_log_path"  yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_DECISION_LOG_PATH"`
 	Shadow          bool   `json:"shadow"             yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_SHADOW"`
+	// Transport selects which Sender implementation NewService uses to talk to
+	// TargetBotID: "alohaclaw" (MQTT, default — preserves pre-existing
+	// behaviour) or "botlink" (direct LAN WebSocket, see pkg/botlink).
+	Transport string `json:"transport"          yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_TRANSPORT"`
+}
+
+const (
+	FanReflexTransportAlohaClaw = "alohaclaw"
+	FanReflexTransportBotLink   = "botlink"
+)
+
+// EffectiveTransport returns the configured Transport, defaulting to
+// "alohaclaw" (MQTT) when unset so existing configs keep working unchanged.
+func (c FanReflexConfig) EffectiveTransport() string {
+	switch strings.ToLower(strings.TrimSpace(c.Transport)) {
+	case FanReflexTransportBotLink:
+		return FanReflexTransportBotLink
+	default:
+		return FanReflexTransportAlohaClaw
+	}
+}
+
+// BotLinkBot is one paired bot allowed to connect over BotLink.
+// TokenSHA256 is a SHA-256 hex digest of the raw bearer token the bot
+// presents; the plaintext token is never stored on the device (mirrors
+// PairedClient in pkg/mgmt). Since only a hash is stored, this does not need
+// a yaml tag to be pulled from .security.yml (see BotLinkConfig doc comment).
+type BotLinkBot struct {
+	BotID       string `json:"bot_id"`
+	TokenSHA256 string `json:"token_sha256"`
+	Name        string `json:"name,omitempty"`
+}
+
+// BotLinkConfig configures the BotLink LAN WebSocket transport (pkg/botlink),
+// the same-subnet alternative to the AlohaClaw MQTT transport. Fields carry
+// yaml:"-" because Bots only ever holds a token hash, never a plaintext
+// secret, so — unlike e.g. AlohaClawConfig.BotPassword — none of it needs to
+// round-trip through .security.yml.
+type BotLinkConfig struct {
+	Enabled bool         `json:"enabled" yaml:"-" env:"PICOCLAW_TOOLS_BOTLINK_ENABLED"`
+	Bots    []BotLinkBot `json:"bots"    yaml:"-"`
 }
 
 // PairedClient represents a management client paired with this device.
