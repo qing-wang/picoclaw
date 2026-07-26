@@ -348,7 +348,21 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return finalizeProviderFromConfig(NewCodexCliProvider(workspace), modelID, cfg)
 
-	case "github-copilot":
+	case "picolm":
+		workspace := cfg.Workspace
+		if workspace == "" {
+			workspace = "."
+		}
+		if strings.TrimSpace(cfg.ModelPath) == "" {
+			return nil, "", fmt.Errorf("model_path is required for picolm protocol (model: %s)", cfg.Model)
+		}
+		return finalizeProviderFromConfig(
+			NewPicoLMProvider(cfg.Binary, cfg.ModelPath, cfg.Template, cfg.Threads, cfg.MaxTokens, workspace),
+			modelID,
+			cfg,
+		)
+
+	case "github-copilot", "copilot":
 		apiBase := cfg.APIBase
 		if apiBase == "" {
 			apiBase = "localhost:4321"

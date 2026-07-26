@@ -129,6 +129,11 @@ This design also enables **multi-agent support** with flexible provider selectio
 | `max_tokens_field` | string | No | Override the max tokens field name in request body (e.g., `max_completion_tokens` for o1 models)                                                                                                                                            |
 | `thinking_level` | string | No | Extended thinking level: `off`, `low`, `medium`, `high`, `xhigh`, or `adaptive`                                                                                                                                                             |
 | `tool_schema_transform` | string | No | Optional compatibility transform for tool parameter schemas. Default: disabled. Supported values: `simple`.                                                                                             |
+| `binary` | string | No | Binary path for subprocess-backed providers such as PicoLM                                                                                                                                                                                   |
+| `model_path` | string | No | Local model file path for subprocess-backed providers such as PicoLM                                                                                                                                                                         |
+| `template` | string | No | Prompt template name for subprocess-backed providers (for PicoLM, `chatml` is supported)                                                                                                                                                    |
+| `threads` | int | No | Thread count for subprocess-backed providers such as PicoLM                                                                                                                                                                                  |
+| `max_tokens` | int | No | Default completion token limit for subprocess-backed providers such as PicoLM                                                                                                                                                                |
 | `extra_body` | object | No | Additional fields to inject into every request body                                                                                                                                                                                         |
 | `custom_headers` | object | No | Additional HTTP headers to inject into every request (e.g., `{"X-Source":"coding-plan"}`). If a key matches a built-in header, the custom value overrides the built-in one (e.g., `Authorization`, `User-Agent`, `Content-Type`, `Accept`). |
 | `streaming.enabled` | bool | No | Opt-in for provider streaming on this model entry. Defaults to `false` and also requires the active channel's `settings.streaming.enabled` to be `true`. |
@@ -357,6 +362,23 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 
 `api_base` defaults to `http://localhost:1234/v1`. API key is optional unless your LM Studio server enables authentication.<br/>
 With explicit `provider`, PicoClaw sends `openai/gpt-oss-20b` unchanged to the LM Studio server. The legacy compatibility form `"model": "lmstudio/openai/gpt-oss-20b"` still resolves to the same upstream model ID when `provider` is omitted.
+
+**PicoLM (local subprocess)**
+
+```json
+{
+  "model_name": "picolm-local",
+  "provider": "picolm",
+  "model": "picolm-local",
+  "binary": "~/.picolm/bin/picolm",
+  "model_path": "~/.picolm/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "template": "chatml",
+  "threads": 4,
+  "max_tokens": 256
+}
+```
+
+PicoLM runs as a local subprocess. PicoClaw formats the conversation as ChatML, pipes it to the `picolm` binary via stdin, and automatically enables PicoLM's `--json` mode when tool calls are available.
 
 **Custom Proxy/API**
 

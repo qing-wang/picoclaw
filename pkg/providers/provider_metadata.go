@@ -321,6 +321,16 @@ var modelProviderOptionsByName = map[string]ModelProviderOption{
 		Priority:            52,
 		Aliases:             []string{"codexcli"},
 	},
+	"picolm": {
+		ID:                  "picolm",
+		DisplayName:         "PicoLM",
+		EmptyAPIKeyAllowed:  true,
+		CreateAllowed:       true,
+		DefaultModelAllowed: true,
+		Local:               true,
+		Priority:            51,
+		Aliases:             []string{"pico-lm"},
+	},
 	"ollama": {
 		ID:                  "ollama",
 		DisplayName:         "Ollama",
