@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
+	"github.com/sipeed/picoclaw/pkg/botlink"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	_ "github.com/sipeed/picoclaw/pkg/channels/dingtalk"
@@ -53,6 +54,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	alohaclawtools "github.com/sipeed/picoclaw/pkg/tools/alohaclaw"
 )
 
 const (
@@ -69,6 +71,7 @@ type services struct {
 	CronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
 	FanReflexService *fanreflex.Service
+	BotLinkServer    *botlink.Server
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
@@ -422,15 +425,28 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Heartbeat service started")
 
+	// BotLink is constructed here (ahead of ChannelManager/mux setup below) so
+	// its Sender is available immediately for FanReflexService, which may be
+	// configured to use it as its transport. RegisterOnMux happens later,
+	// once the shared gateway mux exists.
+	if cfg.Tools.BotLink.Enabled {
+		runningServices.BotLinkServer = botlink.New(cfg.Tools.BotLink)
+	}
+
 	if cfg.Tools.FanReflex.Enabled {
+		var botlinkSender alohaclawtools.Sender
+		if runningServices.BotLinkServer != nil {
+			botlinkSender = runningServices.BotLinkServer.Sender()
+		}
 		frSvc, frErr := fanreflex.NewService(
 			cfg.Tools.FanReflex,
 			cfg.Tools.AlohaClaw,
+			botlinkSender,
 			msgBus,
 			cfg.WorkspacePath(),
 		)
 		if frErr != nil {
-			logger.WarnCF("fanreflex", "Service failed to start — policy invalid or MQTT unavailable",
+			logger.WarnCF("fanreflex", "Service failed to start — policy invalid or transport unavailable",
 				map[string]any{"error": frErr.Error()})
 		} else {
 			runningServices.FanReflexService = frSvc
@@ -497,6 +513,11 @@ func setupAndStartServices(
 		runningServices.HealthServer,
 	)
 
+	if runningServices.BotLinkServer != nil {
+		runningServices.BotLinkServer.RegisterOnMux(runningServices.ChannelManager.Mux())
+		fmt.Printf("✓ BotLink transport enabled at %s\n", botlink.WSPath)
+	}
+
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
 		return nil, fmt.Errorf("error starting channels: %w", err)
 	}
@@ -548,6 +569,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	}
 	if runningServices.FanReflexService != nil {
 		runningServices.FanReflexService.Stop()
+	}
+	if runningServices.BotLinkServer != nil {
+		runningServices.BotLinkServer.Stop()
 	}
 	if runningServices.HeartbeatService != nil {
 		runningServices.HeartbeatService.Stop()
