@@ -47,7 +47,7 @@ type Config struct {
 	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
-	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
+	Voice     VoiceConfig     `json:"voice"               yaml:"voice,omitempty"`
 	Mgmt      MgmtConfig      `json:"mgmt,omitempty"       yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
@@ -737,9 +737,9 @@ type DevicesConfig struct {
 }
 
 type VoiceConfig struct {
-	ModelName         string `json:"model_name,omitempty"         env:"PICOCLAW_VOICE_MODEL_NAME"`
-	TTSModelName      string `json:"tts_model_name,omitempty"     env:"PICOCLAW_VOICE_TTS_MODEL_NAME"`
-	EchoTranscription bool   `json:"echo_transcription"           env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
+	ModelName         string `json:"model_name,omitempty"         yaml:"-" env:"PICOCLAW_VOICE_MODEL_NAME"`
+	TTSModelName      string `json:"tts_model_name,omitempty"     yaml:"-" env:"PICOCLAW_VOICE_TTS_MODEL_NAME"`
+	EchoTranscription bool   `json:"echo_transcription"           yaml:"-" env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
 	ElevenLabsAPIKey  SecureString `json:"elevenlabs_api_key,omitzero" yaml:"elevenlabs_api_key,omitempty" env:"PICOCLAW_VOICE_ELEVENLABS_API_KEY"`
 }
 
@@ -1129,7 +1129,7 @@ type ToolsConfig struct {
 	Subagent        ToolConfig         `json:"subagent"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
-	AlohaClaw       AlohaClawConfig    `json:"alohaclaw"         yaml:"-"`
+	AlohaClaw       AlohaClawConfig    `json:"alohaclaw"         yaml:"alohaclaw,omitempty"`
 	FanReflex       FanReflexConfig    `json:"fanreflex"         yaml:"-"`
 }
 

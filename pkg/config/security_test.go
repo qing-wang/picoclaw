@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/caarlos0/env/v11"
@@ -268,5 +269,84 @@ skills:
 		assert.Equal(t, "qq_app_secret_env", qqCfg.AppSecret.raw)
 		assert.Equal(t, "brave_key_env", envCfg.Tools.Web.Brave.APIKeys[0].raw)
 		assert.Equal(t, "abc", envCfg.Tools.Web.Brave.APIKeys[1].raw)
+	})
+}
+
+// TestCredentialRoundTrip verifies that BotPassword and ElevenLabsAPIKey survive
+// SaveConfig → LoadConfig without plaintext appearing in config.json.
+// This is a regression test for HIGH-1: outer yaml:"-" tags blocking credentials
+// from reaching .security.yml, causing SaveConfig to silently destroy them.
+func TestCredentialRoundTrip(t *testing.T) {
+	const botPassword = "roundtrip-bot-password-xyz"
+	const elevenKey = "roundtrip-elevenlabs-key-abc"
+
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	t.Run("direct struct", func(t *testing.T) {
+		cfg := &Config{
+			Version: CurrentVersion,
+			Tools: ToolsConfig{
+				AlohaClaw: AlohaClawConfig{
+					BotPassword: *NewSecureString(botPassword),
+				},
+			},
+			Voice: VoiceConfig{
+				ElevenLabsAPIKey: *NewSecureString(elevenKey),
+			},
+		}
+
+		require.NoError(t, SaveConfig(cfgPath, cfg))
+
+		// config.json must not contain plaintext
+		jsonData, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+		assert.False(t, strings.Contains(string(jsonData), botPassword), "config.json must not contain bot password plaintext")
+		assert.False(t, strings.Contains(string(jsonData), elevenKey), "config.json must not contain ElevenLabs key plaintext")
+
+		// .security.yml must contain the values
+		secData, err := os.ReadFile(filepath.Join(tmpDir, SecurityConfigFile))
+		require.NoError(t, err, ".security.yml must be created by SaveConfig")
+		secStr := string(secData)
+		assert.True(t, strings.Contains(secStr, botPassword), ".security.yml must contain bot_password value")
+		assert.True(t, strings.Contains(secStr, elevenKey), ".security.yml must contain elevenlabs_api_key value")
+
+		// LoadConfig must restore values
+		loaded, err := LoadConfig(cfgPath)
+		require.NoError(t, err)
+		assert.Equal(t, botPassword, loaded.Tools.AlohaClaw.BotPassword.String(), "BotPassword must survive SaveConfig/LoadConfig round-trip")
+		assert.Equal(t, elevenKey, loaded.Voice.ElevenLabsAPIKey.String(), "ElevenLabsAPIKey must survive SaveConfig/LoadConfig round-trip")
+	})
+
+	t.Run("migration from plaintext json", func(t *testing.T) {
+		// Simulate old device config.json that has credentials as plaintext strings.
+		// SecureString.UnmarshalJSON accepts plaintext, so the value lives in memory.
+		// SaveConfig must then persist it to .security.yml (not leave it in config.json).
+		migDir := t.TempDir()
+		migPath := filepath.Join(migDir, "config.json")
+
+		plainJSON := `{"version":3,"tools":{"alohaclaw":{"bot_password":"` + botPassword + `"}},"voice":{"elevenlabs_api_key":"` + elevenKey + `"}}`
+		var cfg Config
+		require.NoError(t, json.Unmarshal([]byte(plainJSON), &cfg))
+		require.Equal(t, botPassword, cfg.Tools.AlohaClaw.BotPassword.String(), "UnmarshalJSON must accept plaintext")
+		require.Equal(t, elevenKey, cfg.Voice.ElevenLabsAPIKey.String(), "UnmarshalJSON must accept plaintext")
+
+		require.NoError(t, SaveConfig(migPath, &cfg))
+
+		jsonData, err := os.ReadFile(migPath)
+		require.NoError(t, err)
+		assert.False(t, strings.Contains(string(jsonData), botPassword), "after SaveConfig, config.json must not contain bot password plaintext")
+		assert.False(t, strings.Contains(string(jsonData), elevenKey), "after SaveConfig, config.json must not contain ElevenLabs key plaintext")
+
+		secData, err := os.ReadFile(filepath.Join(migDir, SecurityConfigFile))
+		require.NoError(t, err, ".security.yml must be created")
+		secStr := string(secData)
+		assert.True(t, strings.Contains(secStr, botPassword), ".security.yml must contain bot_password value after migration")
+		assert.True(t, strings.Contains(secStr, elevenKey), ".security.yml must contain elevenlabs_api_key value after migration")
+
+		loaded, err := LoadConfig(migPath)
+		require.NoError(t, err)
+		assert.Equal(t, botPassword, loaded.Tools.AlohaClaw.BotPassword.String(), "BotPassword must survive migration round-trip")
+		assert.Equal(t, elevenKey, loaded.Voice.ElevenLabsAPIKey.String(), "ElevenLabsAPIKey must survive migration round-trip")
 	})
 }
