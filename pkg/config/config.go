@@ -48,6 +48,7 @@ type Config struct {
 	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
+	Mgmt      MgmtConfig      `json:"mgmt,omitempty"       yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
 
@@ -1140,6 +1141,24 @@ type FanReflexConfig struct {
 	ModePath        string `json:"mode_path"          yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_MODE_PATH"`
 	DecisionLogPath string `json:"decision_log_path"  yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_DECISION_LOG_PATH"`
 	Shadow          bool   `json:"shadow"             yaml:"-" env:"PICOCLAW_TOOLS_FANREFLEX_SHADOW"`
+}
+
+// PairedClient represents a management client paired with this device.
+// token_sha256 is a SHA-256 hex digest of the raw bearer token; the plaintext
+// token is never stored on the device.
+type PairedClient struct {
+	Name        string `json:"name"`
+	TokenSHA256 string `json:"token_sha256"`
+	Created     string `json:"created"` // RFC3339
+}
+
+// MgmtConfig configures the device management API (pkg/mgmt).
+type MgmtConfig struct {
+	Enabled        bool           `json:"enabled"`
+	DeviceName     string         `json:"device_name,omitempty"`
+	PairInterfaces []string       `json:"pair_interfaces,omitempty"` // Linux interface names
+	PairSubnets    []string       `json:"pair_subnets,omitempty"`    // CIDR whitelist
+	PairedClients  []PairedClient `json:"paired_clients,omitempty"`  // written by /pair
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled

@@ -130,11 +130,18 @@ type Service struct {
 	logSize int64
 
 	// control
-	stopChan   chan struct{}
-	wg         sync.WaitGroup
-	startedAt  time.Time
-	tickCount  int // increments each runTick; drives periodic re-assert
-	mu         sync.Mutex
+	stopChan  chan struct{}
+	wg        sync.WaitGroup
+	startedAt time.Time
+	tickCount int // increments each runTick; drives periodic re-assert
+	mu        sync.Mutex
+
+	// snapshot fields – updated by runLoop goroutine, read by StatusSnapshot
+	snapMu     sync.Mutex
+	snapAt     time.Time
+	snapMode   string
+	snapFail   bool
+	snapReason string
 }
 
 // NewService creates a new Service.  It loads and validates the policy and
@@ -233,6 +240,33 @@ func (s *Service) Stop() {
 	s.closeLog()
 }
 
+// StatusSnapshot returns a read-safe snapshot of current service state for the mgmt API.
+func (s *Service) StatusSnapshot() map[string]any {
+	s.snapMu.Lock()
+	at := s.snapAt
+	mode := s.snapMode
+	fail := s.snapFail
+	reason := s.snapReason
+	s.snapMu.Unlock()
+
+	result := map[string]any{
+		"enabled":          true,
+		"shadow":           s.cfg.Shadow,
+		"target_bot_id":    s.cfg.TargetBotID,
+		"mode":             mode,
+		"fail_safe_active": fail,
+	}
+	if at.IsZero() {
+		result["last_tick_at"] = nil
+	} else {
+		result["last_tick_at"] = at.UTC().Format(time.RFC3339)
+	}
+	if fail && reason != "" {
+		result["fail_safe_reason"] = reason
+	}
+	return result
+}
+
 func (s *Service) runLoop(stop chan struct{}) {
 	defer s.wg.Done()
 	tickDur := time.Duration(s.policy.TickSeconds) * time.Second
@@ -255,6 +289,11 @@ func (s *Service) nowSecs() float64 {
 }
 
 func (s *Service) runTick() {
+	tickStart := time.Now()
+	s.snapMu.Lock()
+	s.snapAt = tickStart
+	s.snapMu.Unlock()
+
 	s.tickCount++
 	isReassertTick := s.tickCount%reassertEveryTicks == 0
 
@@ -264,6 +303,9 @@ func (s *Service) runTick() {
 		modeMap = s.policy.Modes["balanced"]
 		mode = "balanced"
 	}
+	s.snapMu.Lock()
+	s.snapMode = mode
+	s.snapMu.Unlock()
 
 	// Read sensors.
 	rawSensors, readErr := s.readAllSensors()
@@ -291,6 +333,10 @@ func (s *Service) runTick() {
 			s.failSafeActive = false
 			s.failSafeReason = ""
 			s.consecutiveOK = 0
+			s.snapMu.Lock()
+			s.snapFail = false
+			s.snapReason = ""
+			s.snapMu.Unlock()
 			s.notify("fanreflex_recovery", "[FanReflex] 感應器恢復正常，回到正常控制迴圈")
 		}
 		// Stay in fail-safe commands until 3 consecutive OK ticks.
@@ -574,6 +620,10 @@ func (s *Service) triggerFailSafe(reason, mode string, raw map[string]float64) {
 		s.failSafeActive = true
 		s.failSafeReason = reason
 		s.consecutiveOK = 0
+		s.snapMu.Lock()
+		s.snapFail = true
+		s.snapReason = reason
+		s.snapMu.Unlock()
 		logger.WarnCF("fanreflex", "fail-safe triggered", map[string]any{"reason": reason})
 	}
 

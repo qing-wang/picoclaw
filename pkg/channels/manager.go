@@ -1091,6 +1091,14 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 	return nil
 }
 
+// Mux returns the shared HTTP mux for additional handler registration.
+// Must be called after SetupHTTPServerListeners. Returns nil if not yet set up.
+func (m *Manager) Mux() health.HandlerMux {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.mux
+}
+
 // SetupHTTPServer creates a shared HTTP server with the given listen address.
 // It registers health endpoints from the health server and discovers channels
 // that implement WebhookHandler and/or HealthChecker to register their handlers.
