@@ -47,6 +47,9 @@ type tickLog struct {
 	Actuators map[string]any     `json:"actuators"`
 	Alarms    []string           `json:"alarms,omitempty"`
 	Fault     *string            `json:"fault,omitempty"`
+	// State is set to "standby" when the target bot is not connected (BotLink
+	// transport only — see handleStandby). Omitted on normal/fail-safe ticks.
+	State string `json:"state,omitempty"`
 }
 
 // logActuatorFixed is the decision-log entry for a fixed-speed actuator (e.g. pump).
@@ -122,6 +125,12 @@ type Service struct {
 	failSafeReason     string
 	flowLowSecs        float64
 
+	// standbyActive is true while the target bot has no live BotLink
+	// connection. While standby, fail-safe is suppressed (§4.4): an offline
+	// bot is not a fault. Always false for the alohaclaw/MQTT transport,
+	// since alohaclawtools.Sender.IsTargetConnected always reports true there.
+	standbyActive bool
+
 	rateLimit rateLimiter
 
 	// decision log
@@ -137,19 +146,26 @@ type Service struct {
 	mu        sync.Mutex
 
 	// snapshot fields – updated by runLoop goroutine, read by StatusSnapshot
-	snapMu     sync.Mutex
-	snapAt     time.Time
-	snapMode   string
-	snapFail   bool
-	snapReason string
+	snapMu      sync.Mutex
+	snapAt      time.Time
+	snapMode    string
+	snapFail    bool
+	snapReason  string
+	snapStandby bool
 }
 
-// NewService creates a new Service.  It loads and validates the policy and
-// establishes (or joins) the shared MQTT connection.  Returns an error if the
-// policy is invalid or the MQTT connection cannot be established.
+// NewService creates a new Service. It loads and validates the policy and
+// establishes (or joins) the configured transport's shared connection.
+// Returns an error if the policy is invalid or the transport is unavailable.
+//
+// botlinkSender is the Sender obtained from a running botlink.Server (via its
+// Sender() method); pass nil when BotLink is not enabled. It is only used
+// when cfg.EffectiveTransport() == "botlink" — the alohaclaw/MQTT path
+// (default) is entirely unaffected by this parameter.
 func NewService(
 	cfg config.FanReflexConfig,
 	alohaCfg config.AlohaClawConfig,
+	botlinkSender alohaclawtools.Sender,
 	msgBus *bus.MessageBus,
 	workspace string,
 ) (*Service, error) {
@@ -162,15 +178,9 @@ func NewService(
 		return nil, fmt.Errorf("fanreflex: policy invalid: %w", err)
 	}
 
-	port := alohaCfg.Port
-	if port <= 0 {
-		port = 8883
-	}
-	client, err := alohaclawtools.GetOrCreateClient(
-		alohaCfg.BrokerIP, port, alohaCfg.BotID, alohaCfg.BotPassword.String(),
-	)
+	client, err := selectTransport(cfg, alohaCfg, botlinkSender)
 	if err != nil {
-		return nil, fmt.Errorf("fanreflex: MQTT connect: %w", err)
+		return nil, err
 	}
 
 	logPath := cfg.DecisionLogPath
@@ -199,6 +209,36 @@ func NewService(
 	}
 
 	return svc, nil
+}
+
+// selectTransport returns the alohaclawtools.Sender to use per
+// cfg.EffectiveTransport(): "alohaclaw" (default) dials/joins the shared MQTT
+// connection exactly as before; "botlink" uses the caller-provided sender
+// from a running botlink.Server.
+func selectTransport(
+	cfg config.FanReflexConfig,
+	alohaCfg config.AlohaClawConfig,
+	botlinkSender alohaclawtools.Sender,
+) (alohaclawtools.Sender, error) {
+	if cfg.EffectiveTransport() == config.FanReflexTransportBotLink {
+		if botlinkSender == nil {
+			return nil, fmt.Errorf("fanreflex: transport=botlink but no BotLink server is available " +
+				"(is tools.botlink.enabled true?)")
+		}
+		return botlinkSender, nil
+	}
+
+	port := alohaCfg.Port
+	if port <= 0 {
+		port = 8883
+	}
+	client, err := alohaclawtools.GetOrCreateClient(
+		alohaCfg.BrokerIP, port, alohaCfg.BotID, alohaCfg.BotPassword.String(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("fanreflex: MQTT connect: %w", err)
+	}
+	return client, nil
 }
 
 // Start launches the ticker loop.
@@ -247,6 +287,7 @@ func (s *Service) StatusSnapshot() map[string]any {
 	mode := s.snapMode
 	fail := s.snapFail
 	reason := s.snapReason
+	standby := s.snapStandby
 	s.snapMu.Unlock()
 
 	result := map[string]any{
@@ -255,6 +296,7 @@ func (s *Service) StatusSnapshot() map[string]any {
 		"target_bot_id":    s.cfg.TargetBotID,
 		"mode":             mode,
 		"fail_safe_active": fail,
+		"standby":          standby,
 	}
 	if at.IsZero() {
 		result["last_tick_at"] = nil
@@ -306,6 +348,17 @@ func (s *Service) runTick() {
 	s.snapMu.Lock()
 	s.snapMode = mode
 	s.snapMu.Unlock()
+
+	// Target-connectivity gate (§4.4): an offline bot is not a fault. Check
+	// this before touching sensors/fail-safe state at all, so a disconnected
+	// bot never enters the fail-safe ladder — only a connected-but-failing
+	// one does. MQTT's IsTargetConnected always returns true, so this branch
+	// is never taken for that transport (behaviour unchanged).
+	if s.client != nil && !s.client.IsTargetConnected(s.cfg.TargetBotID) {
+		s.enterStandby(mode)
+		return
+	}
+	s.exitStandbyIfActive()
 
 	// Read sensors.
 	rawSensors, readErr := s.readAllSensors()
@@ -471,6 +524,67 @@ func (s *Service) runTick() {
 	}
 
 	s.writeLog(entry)
+}
+
+// enterStandby records a "standby" decision-log tick and, only on the first
+// call after a connected period (or service start), sends a single low-key
+// notification. It deliberately does not touch failSafeActive/consecutive*
+// counters or send any commands — an offline bot must never be treated as a
+// fault (§4.4).
+func (s *Service) enterStandby(mode string) {
+	if !s.standbyActive {
+		s.standbyActive = true
+		s.snapMu.Lock()
+		s.snapStandby = true
+		s.snapMu.Unlock()
+		logger.WarnCF("fanreflex", "target bot not connected — entering standby",
+			map[string]any{"target_bot": s.cfg.TargetBotID})
+		s.notify("fanreflex_standby", fmt.Sprintf(
+			"[FanReflex] 風扇機器人（%s）離線，自動控制暫停", s.cfg.TargetBotID))
+	}
+
+	entry := tickLog{
+		TS:        time.Now().UTC().Format(time.RFC3339),
+		Mode:      mode,
+		State:     "standby",
+		Actuators: map[string]any{},
+	}
+	s.writeLog(entry)
+}
+
+// exitStandbyIfActive is called on every tick where the target bot is
+// connected. When transitioning out of standby it resumes normal control,
+// sends a recovery notification, and clears LastSentPWM everywhere so the
+// next tick re-asserts commands unconditionally — the actual fan state
+// during the offline period is unknown, so "unchanged" cannot be assumed.
+func (s *Service) exitStandbyIfActive() {
+	if !s.standbyActive {
+		return
+	}
+	s.standbyActive = false
+	s.snapMu.Lock()
+	s.snapStandby = false
+	s.snapMu.Unlock()
+
+	s.resetAfterStandby()
+
+	logger.InfoCF("fanreflex", "target bot reconnected — resuming normal control",
+		map[string]any{"target_bot": s.cfg.TargetBotID})
+	s.notify("fanreflex_standby_recovery", fmt.Sprintf(
+		"[FanReflex] 風扇機器人（%s）恢復連線，回到正常自動控制", s.cfg.TargetBotID))
+}
+
+// resetAfterStandby clears every actuator's last-known-sent PWM so the
+// filter engine and re-assert logic treat the next tick as a fresh command
+// rather than "unchanged since last tick" — required because the real fan
+// state during the offline period is unknown.
+func (s *Service) resetAfterStandby() {
+	for name := range s.lastSentPWM {
+		s.lastSentPWM[name] = nil
+	}
+	for _, fs := range s.filterStates {
+		fs.LastSentPWM = nil
+	}
 }
 
 // updateTachState updates per-actuator tach tracking after a command is issued.

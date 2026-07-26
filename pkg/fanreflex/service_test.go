@@ -18,11 +18,16 @@ import (
 type mockSender struct {
 	commandsSent []string
 	sensorJSON   string // overrides default reply if non-empty
+	disconnected bool   // when true, IsTargetConnected reports false (simulates BotLink offline)
+	sensorErr    error  // when non-nil, SendCommand returns this error for GetAllSensorValues
 }
 
 func (m *mockSender) SendCommand(_ context.Context, _ string, text string, _ time.Duration) (string, error) {
 	m.commandsSent = append(m.commandsSent, text)
 	if text == "GetAllSensorValues" {
+		if m.sensorErr != nil {
+			return "", m.sensorErr
+		}
 		if m.sensorJSON != "" {
 			return m.sensorJSON, nil
 		}
@@ -33,6 +38,7 @@ func (m *mockSender) SendCommand(_ context.Context, _ string, text string, _ tim
 
 func (m *mockSender) SendMessage(_ string, _ string) error { return nil }
 func (m *mockSender) IsConnected() bool                    { return true }
+func (m *mockSender) IsTargetConnected(_ string) bool       { return !m.disconnected }
 
 func (m *mockSender) setFanSpeedCalls() int {
 	n := 0
