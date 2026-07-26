@@ -21,6 +21,15 @@ type Sender interface {
 	SendCommand(ctx context.Context, targetID, text string, waitReply time.Duration) (string, error)
 	SendMessage(targetID, text string) error
 	IsConnected() bool
+
+	// IsTargetConnected reports whether targetID currently has a live
+	// connection. Transports with no per-target connection state (e.g. MQTT,
+	// where "connected" only ever means "connected to the broker") always
+	// return true here, preserving pre-existing fanreflex fail-safe behaviour.
+	// Transports with real per-target connection state (e.g. BotLink) use
+	// this to let fanreflex distinguish "target offline" (standby) from
+	// "target connected but not responding" (fail-safe).
+	IsTargetConnected(targetID string) bool
 }
 
 // singletonKey uniquely identifies one MQTT connection.
@@ -253,6 +262,14 @@ func (c *alohaClawClient) SendMessage(targetID, text string) error {
 
 func (c *alohaClawClient) IsConnected() bool {
 	return c.mqttClient != nil && c.mqttClient.IsConnected()
+}
+
+// IsTargetConnected always returns true for the MQTT transport: MQTT has no
+// per-target connection state (a bot's "online-ness" can only be inferred by
+// command timeout), so this preserves the existing fail-safe-on-timeout
+// behaviour unchanged.
+func (c *alohaClawClient) IsTargetConnected(_ string) bool {
+	return true
 }
 
 func (c *alohaClawClient) Disconnect() {
