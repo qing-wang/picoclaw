@@ -11,34 +11,39 @@ Use the `alohaclaw` tool to communicate with other bots on the AlohaClaw MQTT ne
 
 ## How It Works
 
-- Each bot has a unique **BotId** (e.g. `bot-fanbot-1` for CTFanBot)
+- Each bot has a unique **BotId** (e.g. CTFanBot's BotId, set in its settings)
+- `target_id` can be omitted — the tool falls back to the device's configured
+  default target (`tools.alohaclaw.default_target_id`); the tool description
+  shown to you states what that default currently is. Pass `target_id`
+  explicitly only when you need to reach a *different* bot.
 - `send_command`: send a text command and wait for the bot's reply
 - `send_message`: one-way notification, no reply
 - `status`: check if the connection is active
 
 ## CTFanBot Commands
 
-CTFanBot's default BotId is `bot-fanbot-1` (may be changed in its settings).
-
 ```
 # Check connection
-alohaclaw  action="send_command"  target_id="bot-fanbot-1"  text="Ping"
+alohaclaw  action="send_command"  text="Ping"
 
 # List all fan channels (name, RPM, PWM%)
-alohaclaw  action="send_command"  target_id="bot-fanbot-1"  text="GetFanChannels"
+alohaclaw  action="send_command"  text="GetFanChannels"
 
 # List all sensor names and types
-alohaclaw  action="send_command"  target_id="bot-fanbot-1"  text="GetSensorNames"
+alohaclaw  action="send_command"  text="GetSensorNames"
 
 # Get all sensor values at once (temperatures, loads, etc.)
-alohaclaw  action="send_command"  target_id="bot-fanbot-1"  text="GetAllSensorValues"
+alohaclaw  action="send_command"  text="GetAllSensorValues"
 
 # Get a single sensor value by name or id
-alohaclaw  action="send_command"  target_id="bot-fanbot-1"  text="GetSensorValue CPU Core #1"
+alohaclaw  action="send_command"  text="GetSensorValue CPU Core #1"
 
 # Set a fan channel to a specific PWM % (0–100)
-alohaclaw  action="send_command"  target_id="bot-fanbot-1"  text="SetFanSpeed CPU Fan 75"
+alohaclaw  action="send_command"  text="SetFanSpeed CPU Fan 75"
 ```
+
+(Add `target_id="<other-bot-id>"` to any of the above to target a bot other
+than the configured default.)
 
 ## Reply Format
 
