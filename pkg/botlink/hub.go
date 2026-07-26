@@ -56,6 +56,24 @@ func (h *Hub) isAnyConnected() bool {
 	return len(h.conns) > 0
 }
 
+// closeBot closes and evicts botID's current connection, if any. This is
+// used by Server.UpdateConfig to drop a bot's live connection the moment its
+// authorization is revoked (removed from config on reload) — an unpaired bot
+// must not remain connected just because it was already connected before the
+// reload.
+func (h *Hub) closeBot(botID string) {
+	h.mu.Lock()
+	c, ok := h.conns[botID]
+	if ok {
+		delete(h.conns, botID)
+	}
+	h.mu.Unlock()
+
+	if ok {
+		c.close()
+	}
+}
+
 // closeAll closes every active connection, e.g. on server shutdown.
 func (h *Hub) closeAll() {
 	h.mu.Lock()

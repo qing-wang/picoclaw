@@ -425,6 +425,164 @@ func TestConcurrentWrites_NoPanic(t *testing.T) {
 
 // ---- helpers -------------------------------------------------------------------
 
+// ---- UpdateConfig (reload lifecycle) ------------------------------------------
+//
+// These tests cover doc/task-m3d-reload-lifecycle-instructions.md §2 trap 1:
+// BotLinkServer must survive a gateway config reload without ever calling
+// RegisterOnMux a second time. UpdateConfig is the mechanism that lets a
+// live, already-registered Server pick up a reloaded bot list and
+// enabled/disabled flag in place.
+
+// TestUpdateConfig_AddedBotAuthenticates verifies that a bot absent from the
+// server's initial config is rejected, but can authenticate once UpdateConfig
+// adds it — without any new mux registration.
+func TestUpdateConfig_AddedBotAuthenticates(t *testing.T) {
+	srv, httpSrv, cleanup := newTestServer(t) // bot1 only
+	defer cleanup()
+
+	_, resp, err := dialBot(httpSrv, "bot2", "bot2-token")
+	if err == nil {
+		t.Fatal("expected bot2 dial to fail before UpdateConfig")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 before UpdateConfig, got resp=%v", resp)
+	}
+
+	srv.UpdateConfig(config.BotLinkConfig{
+		Enabled: true,
+		Bots: []config.BotLinkBot{
+			{BotID: "bot1", TokenSHA256: tokenHash("secret-token")},
+			{BotID: "bot2", TokenSHA256: tokenHash("bot2-token")},
+		},
+	})
+
+	conn, resp, err := dialBot(httpSrv, "bot2", "bot2-token")
+	if err != nil {
+		t.Fatalf("expected bot2 to authenticate after UpdateConfig: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+}
+
+// TestUpdateConfig_RemovedBotDisconnectedAndCannotReconnect verifies that a
+// bot dropped from config by UpdateConfig has its live connection closed
+// immediately (revoked authorization must not leave it connected) and cannot
+// re-authenticate afterwards.
+func TestUpdateConfig_RemovedBotDisconnectedAndCannotReconnect(t *testing.T) {
+	srv, httpSrv, cleanup := newTestServer(t, config.BotLinkBot{BotID: "bot2", TokenSHA256: tokenHash("bot2-token")})
+	defer cleanup()
+
+	bot2Conn := mustDialBot(t, httpSrv, "bot2", "bot2-token")
+	defer bot2Conn.Close()
+	waitForConnected(t, srv.Sender(), "bot2")
+
+	// Reload drops bot2, keeps bot1.
+	srv.UpdateConfig(config.BotLinkConfig{
+		Enabled: true,
+		Bots: []config.BotLinkBot{
+			{BotID: "bot1", TokenSHA256: tokenHash("secret-token")},
+		},
+	})
+
+	_ = bot2Conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := bot2Conn.ReadMessage(); err == nil {
+		t.Fatal("expected bot2's connection to be closed after UpdateConfig removed it")
+	}
+
+	_, resp, err := dialBot(httpSrv, "bot2", "bot2-token")
+	if err == nil {
+		t.Fatal("expected bot2 reconnect to fail after removal")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for removed bot2, got resp=%v", resp)
+	}
+}
+
+// TestUpdateConfig_KeptBotConnectionUnaffected verifies that a bot present in
+// both the old and new config keeps its live connection across UpdateConfig
+// — reload must not disturb a still-authorized, already-connected bot.
+func TestUpdateConfig_KeptBotConnectionUnaffected(t *testing.T) {
+	srv, httpSrv, cleanup := newTestServer(t)
+	defer cleanup()
+
+	conn := mustDialBot(t, httpSrv, "bot1", "secret-token")
+	defer conn.Close()
+	waitForConnected(t, srv.Sender(), "bot1")
+
+	srv.UpdateConfig(config.BotLinkConfig{
+		Enabled: true,
+		Bots: []config.BotLinkBot{
+			{BotID: "bot1", TokenSHA256: tokenHash("secret-token")},
+		},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = srv.Sender().SendCommand(context.Background(), "bot1", "Ping", 2*time.Second)
+	}()
+	cmd := readWireMessage(t, conn, 2*time.Second)
+	if cmd.Text != "Ping" {
+		t.Fatalf("expected surviving bot1 connection to receive the command, got %q", cmd.Text)
+	}
+	reply := wireMessage{Type: msgTypeReply, RequestID: cmd.RequestID, Payload: json.RawMessage(`{"success":true}`)}
+	_ = conn.WriteJSON(reply)
+	<-done
+}
+
+// ---- enable/disable toggle (no re-registration) -------------------------------
+
+// TestHandleWebSocket_DisabledReturns503 verifies trap 2 from the task doc:
+// a disabled server rejects the upgrade with 503, and toggling Enabled back
+// on via UpdateConfig makes the *same* handler (no re-registration) accept
+// connections again.
+func TestHandleWebSocket_DisabledReturns503(t *testing.T) {
+	srv := New(config.BotLinkConfig{
+		Enabled: false,
+		Bots:    []config.BotLinkBot{{BotID: "bot1", TokenSHA256: tokenHash("secret-token")}},
+	})
+	httpSrv := httptest.NewServer(http.HandlerFunc(srv.handleWebSocket))
+	defer func() {
+		httpSrv.Close()
+		srv.Stop()
+	}()
+
+	_, resp, err := dialBot(httpSrv, "bot1", "secret-token")
+	if err == nil {
+		t.Fatal("expected dial to fail while disabled")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 while disabled, got resp=%v", resp)
+	}
+
+	srv.UpdateConfig(config.BotLinkConfig{
+		Enabled: true,
+		Bots:    []config.BotLinkBot{{BotID: "bot1", TokenSHA256: tokenHash("secret-token")}},
+	})
+
+	conn, resp, err := dialBot(httpSrv, "bot1", "secret-token")
+	if err != nil {
+		t.Fatalf("expected dial to succeed after enabling via UpdateConfig: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+}
+
+// TestRegisterOnMux_Twice_PanicsOnRealMux documents why the reload design
+// (UpdateConfig, not "stop and recreate the Server") is mandatory: a real
+// http.ServeMux panics if the same pattern is registered twice. If gateway
+// code were ever changed to rebuild BotLinkServer and call RegisterOnMux
+// again on reload, this is the crash it would hit in production.
+func TestRegisterOnMux_Twice_PanicsOnRealMux(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic from registering /botlink/ws twice on the same http.ServeMux")
+		}
+	}()
+	mux := http.NewServeMux()
+	srv := New(config.BotLinkConfig{Enabled: true})
+	srv.RegisterOnMux(mux)
+	srv.RegisterOnMux(mux)
+}
+
 // waitForConnected polls until sender reports botID connected, or fails the
 // test after a short deadline. This avoids a race between the client-side
 // Dial() returning and the server-side hub registration goroutine running.

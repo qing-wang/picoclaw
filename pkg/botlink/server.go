@@ -38,9 +38,19 @@ type handlerMux interface {
 // the configured bot list, and maintains a Hub of live connections. Sender()
 // exposes that hub through the alohaclaw.Sender interface for fanreflex (or
 // any other caller) to send commands over.
+//
+// Server is designed to survive a gateway config reload without being
+// recreated: RegisterOnMux mounts /botlink/ws on the shared gateway
+// http.ServeMux exactly once, at process startup — a ServeMux panics if the
+// same pattern is registered twice, so reload cannot rebuild-and-re-register
+// a new Server. Instead, reload calls UpdateConfig to swap in the new bot
+// authorization table and enabled flag on this same, already-registered
+// instance (see doc/task-m3d-reload-lifecycle-instructions.md §2).
 type Server struct {
-	hub  *Hub
-	bots map[string]config.BotLinkBot // bot_id -> config, snapshot at construction
+	mu      sync.RWMutex
+	hub     *Hub
+	bots    map[string]config.BotLinkBot // bot_id -> config; replaced wholesale by UpdateConfig
+	enabled bool                         // checked by handleWebSocket; toggled by UpdateConfig
 
 	upgrader     websocket.Upgrader
 	pingInterval time.Duration
@@ -53,6 +63,11 @@ type Server struct {
 
 // New creates a BotLink server for the given set of paired bots. It does not
 // start listening until RegisterOnMux is called with the shared gateway mux.
+// cfg.Enabled only gates whether handleWebSocket accepts connections (503
+// when false) — RegisterOnMux must still be called unconditionally so that a
+// later reload can flip Enabled on via UpdateConfig without needing to
+// register the handler for the first time (which would panic if some other
+// path already registered it, or simply be too late if nothing did).
 func New(cfg config.BotLinkConfig) *Server {
 	bots := make(map[string]config.BotLinkBot, len(cfg.Bots))
 	for _, b := range cfg.Bots {
@@ -60,8 +75,9 @@ func New(cfg config.BotLinkConfig) *Server {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
-		hub:  newHub(),
-		bots: bots,
+		hub:     newHub(),
+		bots:    bots,
+		enabled: cfg.Enabled,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -78,8 +94,41 @@ func New(cfg config.BotLinkConfig) *Server {
 
 // RegisterOnMux mounts /botlink/ws on mux (mirrors pkg/mgmt and
 // pkg/channels/pico's RegisterOnMux / mux-registration pattern).
+//
+// Call this exactly once per process lifetime, regardless of whether BotLink
+// is currently enabled — http.ServeMux panics on duplicate registration of
+// the same pattern, so calling this again on config reload (e.g. from a
+// rebuilt Server) would crash the gateway. Enable/disable after startup is a
+// runtime state check inside handleWebSocket (503 when disabled), handled by
+// UpdateConfig, not a registration decision.
 func (s *Server) RegisterOnMux(mux handlerMux) {
 	mux.HandleFunc(WSPath, s.handleWebSocket)
+}
+
+// UpdateConfig replaces this server's bot authorization table and enabled
+// flag with cfg's, without touching the mux registration (see RegisterOnMux).
+// Any bot present in the old table but absent from cfg.Bots has its live
+// connection closed immediately — its authorization was just revoked, so it
+// must not remain connected. Bots that remain in cfg.Bots keep their
+// existing connection untouched (reload must not disturb bots that are still
+// authorized, even if unrelated config changed).
+func (s *Server) UpdateConfig(cfg config.BotLinkConfig) {
+	newBots := make(map[string]config.BotLinkBot, len(cfg.Bots))
+	for _, b := range cfg.Bots {
+		newBots[b.BotID] = b
+	}
+
+	s.mu.Lock()
+	oldBots := s.bots
+	s.bots = newBots
+	s.enabled = cfg.Enabled
+	s.mu.Unlock()
+
+	for botID := range oldBots {
+		if _, stillPaired := newBots[botID]; !stillPaired {
+			s.hub.closeBot(botID)
+		}
+	}
 }
 
 // Sender returns a Sender implementation backed by this server's hub.
@@ -104,7 +153,9 @@ func (s *Server) authenticate(r *http.Request) (config.BotLinkBot, bool) {
 		return config.BotLinkBot{}, false
 	}
 
+	s.mu.RLock()
 	bot, ok := s.bots[botID]
+	s.mu.RUnlock()
 	if !ok || bot.TokenSHA256 == "" {
 		return config.BotLinkBot{}, false
 	}
@@ -129,7 +180,20 @@ func extractBearerToken(header string) string {
 // handleWebSocket authenticates and upgrades one BotLink connection. On
 // success, an existing connection for the same bot_id is closed and replaced
 // (§3: "同一 bot_id 重複連線 → 新連線取代舊連線").
+//
+// This handler is registered on the mux unconditionally (see RegisterOnMux)
+// so that enabling BotLink via a config reload never needs a second
+// registration; when currently disabled it rejects with 503 instead of
+// upgrading.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	enabled := s.enabled
+	s.mu.RUnlock()
+	if !enabled {
+		http.Error(w, "botlink disabled", http.StatusServiceUnavailable)
+		return
+	}
+
 	bot, ok := s.authenticate(r)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
