@@ -44,6 +44,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/fanreflex"
 	"github.com/sipeed/picoclaw/pkg/health"
+	"github.com/sipeed/picoclaw/pkg/mgmt"
 	"github.com/sipeed/picoclaw/pkg/heartbeat"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -72,6 +73,7 @@ type services struct {
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
 	HealthServer     *health.Server
+	MgmtServer       *mgmt.Server
 	VoiceAgentCancel context.CancelFunc
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
@@ -250,6 +252,24 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	}
 	runningServices.HealthServer.SetReloadFunc(reloadTrigger)
 	agentLoop.SetReloadFunc(reloadTrigger)
+
+	if cfg.Mgmt.Enabled {
+		mgmtSrv := mgmt.New(mgmt.Options{
+			Cfg:           cfg.Mgmt,
+			ConfigPath:    configPath,
+			HomePath:      homePath,
+			WorkspacePath: cfg.WorkspacePath(),
+			Version:       config.FormatVersion(),
+		})
+		mgmtSrv.SetReloadFunc(reloadTrigger)
+		if runningServices.FanReflexService != nil {
+			mgmtSrv.SetStatusProvider(runningServices.FanReflexService.StatusSnapshot)
+		}
+		mgmtSrv.SetEnabledChannelsFn(runningServices.ChannelManager.GetEnabledChannels)
+		mgmtSrv.RegisterOnMux(runningServices.ChannelManager.Mux())
+		runningServices.MgmtServer = mgmtSrv
+		fmt.Println("✓ Management API enabled at /mgmt/v1")
+	}
 
 	for _, bindHost := range listenResult.BindHosts {
 		fmt.Printf("✓ Gateway started on %s\n", net.JoinHostPort(bindHost, strconv.Itoa(cfg.Gateway.Port)))
