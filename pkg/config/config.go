@@ -878,6 +878,38 @@ type AlohaClawConfig struct {
 	BotID        string       `json:"bot_id"                yaml:"-"                        env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_ID"`
 	BotPassword  SecureString `json:"bot_password,omitzero" yaml:"bot_password,omitempty"  env:"PICOCLAW_TOOLS_ALOHACLAW_BOT_PASSWORD"`
 	ReplyTimeout int          `json:"reply_timeout_seconds" yaml:"-"                        env:"PICOCLAW_TOOLS_ALOHACLAW_REPLY_TIMEOUT_SECONDS"`
+	// Transport selects which Sender implementation the alohaclaw LLM tool
+	// uses: "mqtt" (default — preserves pre-existing behaviour, existing
+	// configs are unaffected) or "botlink" (direct LAN WebSocket, see
+	// pkg/botlink). Use EffectiveTransport() rather than reading this field
+	// directly.
+	Transport string `json:"transport"          yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_TRANSPORT"`
+	// DefaultTargetID is the BotId used by the alohaclaw tool's send_command/
+	// send_message actions when the LLM does not supply a target_id argument.
+	// Leave empty to require the LLM to always specify target_id explicitly.
+	DefaultTargetID string `json:"default_target_id" yaml:"-" env:"PICOCLAW_TOOLS_ALOHACLAW_DEFAULT_TARGET_ID"`
+}
+
+const (
+	AlohaClawTransportMQTT    = "mqtt"
+	AlohaClawTransportBotLink = "botlink"
+)
+
+// EffectiveTransport returns the configured Transport, defaulting to "mqtt"
+// when unset so existing configs (written before BotLink existed) keep
+// working unchanged. Unknown values also fall back to "mqtt", logging a
+// warning so a typo in config.json is visible rather than silently ignored.
+func (c AlohaClawConfig) EffectiveTransport() string {
+	switch strings.ToLower(strings.TrimSpace(c.Transport)) {
+	case "", AlohaClawTransportMQTT:
+		return AlohaClawTransportMQTT
+	case AlohaClawTransportBotLink:
+		return AlohaClawTransportBotLink
+	default:
+		logger.WarnCF("config", "alohaclaw: unknown transport, falling back to mqtt",
+			map[string]any{"transport": c.Transport})
+		return AlohaClawTransportMQTT
+	}
 }
 
 type BraveConfig struct {
